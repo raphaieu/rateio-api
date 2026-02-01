@@ -1,0 +1,323 @@
+import { Hono } from "hono";
+import { authMiddleware } from "../middleware/auth.js";
+import { db } from "../db/index.js";
+import { splits, participants, items, itemShares, extras, splitCosts } from "../db/schema.js";
+import { eq, inArray } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import { zValidator } from "@hono/zod-validator";
+import { calculateSplit, ItemShareInput } from "../services/calculation.js";
+import { WalletService } from "../services/wallet.js";
+
+const app = new Hono<{ Variables: { clerkUserId: string } }>();
+
+app.use("*", authMiddleware);
+
+// -----------------------------------------------------------------------------
+// GET /splits/:id
+// -----------------------------------------------------------------------------
+app.get("/:id", async (c) => {
+    const id = c.req.param("id");
+    const userId = c.get("clerkUserId");
+
+    const split = await db.query.splits.findFirst({
+        where: eq(splits.id, id),
+        with: {
+            participants: { orderBy: (p, { asc }) => [asc(p.sortOrder)] },
+            items: true,
+            extras: true,
+            splitCosts: true
+        },
+    });
+
+    if (!split) return c.json({ error: "Split not found" }, 404);
+    if (split.ownerClerkUserId !== userId) {
+        return c.json({ error: "Unauthorized" }, 403);
+    }
+
+    // Fetch consumers
+    const itemIds = split.items.map(i => i.id);
+    let allShares: any[] = [];
+    if (itemIds.length > 0) {
+        allShares = await db.select().from(itemShares).where(inArray(itemShares.itemId, itemIds));
+    }
+
+    return c.json({ ...split, shares: allShares });
+});
+
+// -----------------------------------------------------------------------------
+// POST /splits
+// -----------------------------------------------------------------------------
+app.post("/", zValidator("json", z.object({
+    name: z.string().optional(),
+    peopleCount: z.number().min(2).max(20).default(2)
+})), async (c) => {
+    const userId = c.get("clerkUserId");
+    const { name, peopleCount } = c.req.valid("json");
+
+    const splitId = randomUUID();
+    const now = Math.floor(Date.now() / 1000);
+
+    await db.transaction(async (tx) => {
+        await tx.insert(splits).values({
+            id: splitId,
+            ownerClerkUserId: userId,
+            name: name || `Rateio ${new Date().toLocaleDateString()}`,
+            createdAt: now,
+            updatedAt: now,
+        });
+
+        for (let i = 0; i < peopleCount; i++) {
+            await tx.insert(participants).values({
+                id: randomUUID(),
+                splitId: splitId,
+                name: `Pessoa ${i + 1}`,
+                sortOrder: i
+            });
+        }
+    });
+
+    return c.json({ id: splitId }, 201);
+});
+
+// -----------------------------------------------------------------------------
+// PUT /splits/:id/participants
+// -----------------------------------------------------------------------------
+const updateParticipantsSchema = z.object({
+    participants: z.array(z.object({
+        id: z.string().optional(),
+        name: z.string(),
+    }))
+});
+
+app.put("/:id/participants", zValidator("json", updateParticipantsSchema), async (c) => {
+    const id = c.req.param("id");
+    const userId = c.get("clerkUserId");
+    const { participants: newParts } = c.req.valid("json");
+
+    const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
+    if (!split) return c.json({ error: "Not found" }, 404);
+    if (split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+    if (split.status === "PAID") return c.json({ error: "Split is locked" }, 400);
+
+    await db.transaction(async (tx) => {
+        const currentParams = await tx.select().from(participants).where(eq(participants.splitId, id));
+        const currentIds = new Set(currentParams.map(p => p.id));
+        const incomingIds = new Set();
+
+        for (let i = 0; i < newParts.length; i++) {
+            const p = newParts[i];
+            const pId = p.id && currentIds.has(p.id) ? p.id : randomUUID();
+            incomingIds.add(pId);
+
+            if (p.id && currentIds.has(p.id)) {
+                await tx.update(participants)
+                    .set({ name: p.name, sortOrder: i })
+                    .where(eq(participants.id, pId));
+            } else {
+                await tx.insert(participants).values({
+                    id: pId,
+                    splitId: id,
+                    name: p.name,
+                    sortOrder: i
+                });
+            }
+        }
+
+        for (const curr of currentParams) {
+            if (!incomingIds.has(curr.id)) {
+                await tx.delete(participants).where(eq(participants.id, curr.id));
+            }
+        }
+    });
+
+    return c.json({ success: true });
+});
+
+// -----------------------------------------------------------------------------
+// PUT /splits/:id/items
+// -----------------------------------------------------------------------------
+const updateItemsSchema = z.object({
+    items: z.array(z.object({
+        id: z.string().optional(),
+        name: z.string(),
+        amountCents: z.number(),
+        consumerIds: z.array(z.string())
+    }))
+});
+
+app.put("/:id/items", zValidator("json", updateItemsSchema), async (c) => {
+    const id = c.req.param("id");
+    const userId = c.get("clerkUserId");
+    const { items: newItems } = c.req.valid("json");
+
+    const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
+    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+    if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
+
+    await db.transaction(async (tx) => {
+        await tx.delete(items).where(eq(items.splitId, id)); // Cascades shares
+
+        for (const item of newItems) {
+            const itemId = item.id || randomUUID();
+            await tx.insert(items).values({
+                id: itemId,
+                splitId: id,
+                name: item.name,
+                amountCents: item.amountCents
+            });
+
+            for (const cid of item.consumerIds) {
+                await tx.insert(itemShares).values({
+                    itemId: itemId,
+                    participantId: cid
+                });
+            }
+        }
+    });
+
+    return c.json({ success: true });
+});
+
+// -----------------------------------------------------------------------------
+// PUT /splits/:id/extras
+// -----------------------------------------------------------------------------
+const updateExtrasSchema = z.object({
+    extras: z.array(z.object({
+        type: z.enum(["SERVICE_PERCENT", "FIXED"]),
+        valueCents: z.number().optional(),
+        valuePercentBp: z.number().optional(),
+        allocationMode: z.enum(["PROPORTIONAL", "EQUAL"])
+    }))
+});
+
+app.put("/:id/extras", zValidator("json", updateExtrasSchema), async (c) => {
+    const id = c.req.param("id");
+    const userId = c.get("clerkUserId");
+    const { extras: newExtras } = c.req.valid("json");
+
+    const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
+    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+    if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
+
+    await db.transaction(async (tx) => {
+        await tx.delete(extras).where(eq(extras.splitId, id));
+        for (const extra of newExtras) {
+            await tx.insert(extras).values({
+                id: randomUUID(),
+                splitId: id,
+                type: extra.type,
+                valueCents: extra.valueCents,
+                valuePercentBp: extra.valuePercentBp,
+                allocationMode: extra.allocationMode
+            });
+        }
+    });
+
+    return c.json({ success: true });
+});
+
+// -----------------------------------------------------------------------------
+// POST /splits/:id/ai-parse (Stub)
+// -----------------------------------------------------------------------------
+app.post("/:id/ai-parse", zValidator("json", z.object({
+    text: z.string()
+})), async (c) => {
+    const id = c.req.param("id");
+    const userId = c.get("clerkUserId");
+    const { text } = c.req.valid("json");
+
+    const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
+    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+    if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
+
+    const len = text.length;
+    let cost = 0;
+
+    const t1Max = parseInt(process.env.AI_TEXT_TIER_1_MAX_CHARS || "1000");
+    const t1Cost = parseInt(process.env.AI_TEXT_TIER_1_CENTS || "50");
+    const t2Max = parseInt(process.env.AI_TEXT_TIER_2_MAX_CHARS || "5000");
+    const t2Cost = parseInt(process.env.AI_TEXT_TIER_2_CENTS || "100");
+
+    if (len <= t1Max) cost = t1Cost;
+    else if (len <= t2Max) cost = t2Cost;
+    else cost = parseInt(process.env.AI_TEXT_TIER_3_CENTS || "200");
+
+    const mockItems = text.split("\n")
+        .filter(line => line.trim().length > 0)
+        .map(line => ({
+            name: line.trim(),
+            amountCents: 1000
+        }));
+
+    return c.json({
+        costCents: cost,
+        parsedItems: mockItems
+    });
+});
+
+// -----------------------------------------------------------------------------
+// POST /splits/:id/compute-review
+// -----------------------------------------------------------------------------
+app.post("/:id/compute-review", async (c) => {
+    const id = c.req.param("id");
+    const userId = c.get("clerkUserId");
+
+    const split = await db.query.splits.findFirst({
+        where: eq(splits.id, id),
+        with: {
+            participants: true,
+            items: true,
+            extras: true
+        }
+    });
+
+    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+
+    const itemIds = split.items.map(i => i.id);
+    let allShares: any[] = [];
+    if (itemIds.length > 0) {
+        allShares = await db.select().from(itemShares).where(inArray(itemShares.itemId, itemIds));
+    }
+
+    // Convert to strict input type
+    const shareInputs: ItemShareInput[] = allShares.map(s => ({ itemId: s.itemId, participantId: s.participantId }));
+
+    const baseFeeCents = parseInt(process.env.BASE_FEE_CENTS || "0");
+    const aiCents = 0;
+
+    const result = calculateSplit(
+        split.participants,
+        split.items,
+        shareInputs,
+        split.extras,
+        baseFeeCents,
+        aiCents
+    );
+
+    await db.insert(splitCosts).values({
+        splitId: id,
+        baseFeeCents: result.baseFeeCents,
+        aiCents: result.aiCents,
+        totalCents: result.finalTotalToPayCents
+    }).onConflictDoUpdate({
+        target: splitCosts.splitId,
+        set: {
+            baseFeeCents: result.baseFeeCents,
+            aiCents: result.aiCents,
+            totalCents: result.finalTotalToPayCents
+        }
+    });
+
+    const walletBalance = await WalletService.getBalance(userId);
+
+    return c.json({
+        calculation: result,
+        wallet: {
+            balanceCents: walletBalance,
+            remainingToPay: Math.max(0, result.finalTotalToPayCents - walletBalance)
+        }
+    });
+});
+
+export default app;
