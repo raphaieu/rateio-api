@@ -216,6 +216,6 @@ export function calculateSplit(
         grandTotalCents: checkTotal,
         baseFeeCents,
         aiCents,
-        finalTotalToPayCents: checkTotal + baseFeeCents + aiCents
+        finalTotalToPayCents: checkTotal // Bill total only
     };
 }

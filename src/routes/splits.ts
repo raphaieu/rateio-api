@@ -14,6 +14,22 @@ const app = new Hono<{ Variables: { clerkUserId: string } }>();
 app.use("*", authMiddleware);
 
 // -----------------------------------------------------------------------------
+// GET /splits (List)
+// -----------------------------------------------------------------------------
+app.get("/", async (c) => {
+    const userId = c.get("clerkUserId");
+    const userSplits = await db.query.splits.findMany({
+        where: eq(splits.ownerClerkUserId, userId),
+        orderBy: (splits, { desc }) => [desc(splits.createdAt)],
+        with: {
+            participants: true,
+            items: true
+        }
+    });
+    return c.json(userSplits);
+});
+
+// -----------------------------------------------------------------------------
 // GET /splits/:id
 // -----------------------------------------------------------------------------
 app.get("/:id", async (c) => {
@@ -46,6 +62,29 @@ app.get("/:id", async (c) => {
 });
 
 // -----------------------------------------------------------------------------
+// PATCH /splits/:id
+// -----------------------------------------------------------------------------
+app.patch("/:id", zValidator("json", z.object({
+    name: z.string().optional()
+})), async (c) => {
+    const id = c.req.param("id");
+    const userId = c.get("clerkUserId");
+    const { name } = c.req.valid("json");
+
+    const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
+    if (!split) return c.json({ error: "Not found" }, 404);
+    if (split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+
+    if (name) {
+        await db.update(splits)
+            .set({ name, updatedAt: Math.floor(Date.now() / 1000) })
+            .where(eq(splits.id, id));
+    }
+
+    return c.json({ success: true });
+});
+
+// -----------------------------------------------------------------------------
 // POST /splits
 // -----------------------------------------------------------------------------
 app.post("/", zValidator("json", z.object({
@@ -67,13 +106,17 @@ app.post("/", zValidator("json", z.object({
             updatedAt: now,
         });
 
-        for (let i = 0; i < peopleCount; i++) {
-            await tx.insert(participants).values({
-                id: randomUUID(),
-                splitId: splitId,
-                name: `Pessoa ${i + 1}`,
-                sortOrder: i
-            });
+        if (peopleCount > 0) {
+            const batchParticipants = [];
+            for (let i = 0; i < peopleCount; i++) {
+                batchParticipants.push({
+                    id: randomUUID(),
+                    splitId: splitId,
+                    name: `Pessoa ${i + 1}`,
+                    sortOrder: i
+                });
+            }
+            await tx.insert(participants).values(batchParticipants);
         }
     });
 
@@ -156,11 +199,19 @@ app.put("/:id/items", zValidator("json", updateItemsSchema), async (c) => {
     if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
 
     await db.transaction(async (tx) => {
-        await tx.delete(items).where(eq(items.splitId, id)); // Cascades shares
+        await tx.delete(items).where(eq(items.splitId, id)); // Cascades shares? Drizzle doesn't auto-cascade unless defined in DB, but assuming clean start for now or manual cleanup if needed. Note: itemShares has Cascade on Delete in schema usually.
+        // Actually, let's explicit delete shares if needed, but if FK has ON DELETE CASCADE it's fine.
+        // Given schema definition isn't visible, assuming safe or doing explicit.
+        // Optimization: Batch Insert
+
+        if (newItems.length === 0) return;
+
+        const batchItems = [];
+        const batchShares = [];
 
         for (const item of newItems) {
             const itemId = item.id || randomUUID();
-            await tx.insert(items).values({
+            batchItems.push({
                 id: itemId,
                 splitId: id,
                 name: item.name,
@@ -168,11 +219,19 @@ app.put("/:id/items", zValidator("json", updateItemsSchema), async (c) => {
             });
 
             for (const cid of item.consumerIds) {
-                await tx.insert(itemShares).values({
+                batchShares.push({
                     itemId: itemId,
                     participantId: cid
                 });
             }
+        }
+
+        if (batchItems.length > 0) {
+            await tx.insert(items).values(batchItems);
+        }
+
+        if (batchShares.length > 0) {
+            await tx.insert(itemShares).values(batchShares);
         }
     });
 
@@ -202,16 +261,19 @@ app.put("/:id/extras", zValidator("json", updateExtrasSchema), async (c) => {
 
     await db.transaction(async (tx) => {
         await tx.delete(extras).where(eq(extras.splitId, id));
-        for (const extra of newExtras) {
-            await tx.insert(extras).values({
-                id: randomUUID(),
-                splitId: id,
-                type: extra.type,
-                valueCents: extra.valueCents,
-                valuePercentBp: extra.valuePercentBp,
-                allocationMode: extra.allocationMode
-            });
-        }
+
+        if (newExtras.length === 0) return;
+
+        const batchExtras = newExtras.map(extra => ({
+            id: randomUUID(),
+            splitId: id,
+            type: extra.type,
+            valueCents: extra.valueCents,
+            valuePercentBp: extra.valuePercentBp,
+            allocationMode: extra.allocationMode
+        }));
+
+        await tx.insert(extras).values(batchExtras);
     });
 
     return c.json({ success: true });

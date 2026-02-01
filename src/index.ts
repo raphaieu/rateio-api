@@ -1,15 +1,13 @@
+import "dotenv/config";
 import { authMiddleware } from "./middleware/auth.js";
 
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { config } from "dotenv";
 import splitsRoute from "./routes/splits.js";
 import paymentRoute from "./routes/payment.js";
 import publicRoute from "./routes/public.js";
-
-config();
 
 const app = new Hono();
 
@@ -19,7 +17,7 @@ app.use(
     cors({
         origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
         allowHeaders: ["Content-Type", "Authorization"],
-        allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     })
 );
 
