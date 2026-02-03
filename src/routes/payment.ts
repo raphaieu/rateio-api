@@ -124,9 +124,13 @@ app.post("/splits/:id/pay", authMiddleware, zValidator("json", z.object({
             copyPaste: payment.point_of_interaction?.transaction_data?.qr_code,
             paymentId: payment.id
         });
-    } catch (err) {
-        console.error(err);
-        return c.json({ error: "Payment provider error" }, 500);
+    } catch (err: any) {
+        console.error("MP Error:", err);
+        return c.json({
+            error: "Payment provider error",
+            details: err.message || JSON.stringify(err),
+            cause: err.cause || err.stack
+        }, 500);
     }
 });
 
@@ -134,21 +138,58 @@ app.post("/splits/:id/pay", authMiddleware, zValidator("json", z.object({
 // POST /webhooks/mercadopago
 // -----------------------------------------------------------------------------
 app.post("/webhooks/mercadopago", async (c) => {
-    const secret = process.env.MERCADO_PAGO_WEBHOOK_SECRET;
-
-    // Verify signature if possible.
-    // MP sends x-signature or similar.
-    // For MVP, checking if payment exists and status matches is decent.
-    // Or verify secret in query param? usually MP sends notification.
-
+    const secret = process.env.MERCADO_PAGO_WEBHOOK_SECRET || "";
     const body = await c.req.json().catch(() => null);
     const query = c.req.query();
 
-    // MP Webhook format: { action: "payment.created" | "payment.updated", data: { id: "..." } }
-    // Or query params: type=payment, data.id=...
+    // Verify signature
+    const xSignature = c.req.header("x-signature");
+    const xRequestId = c.req.header("x-request-id");
 
-    // We prefer "notification_url" approach or topic.
-    // Assume: { action, data: { id } }
+    if (process.env.NODE_ENV !== "development" && (!xSignature || !xRequestId)) {
+        return c.json({ error: "Missing signature" }, 401);
+    }
+
+    if (secret && xSignature && xRequestId) {
+        // Parse signature
+        const parts = xSignature.split(',');
+        let ts, hash;
+        parts.forEach(part => {
+            const [key, value] = part.split('=');
+            if (key && value) {
+                const k = key.trim();
+                const v = value.trim();
+                if (k === 'ts') ts = v;
+                else if (k === 'v1') hash = v;
+            }
+        });
+
+        // Parse data.id from URL if present, or body
+        // Docs say: id:[data.id_url];request-id:[x-request-id_header];ts:[ts_header];
+        // But we are receiving POST body mostly. 
+        // Docs: "Este query param pode ser encontrado na notificação recebida em letra maiúscula, mas deverá ser utilizado em minúscula."
+        // Example: data.id=ORD... -> use ord...
+        // If data.id is in body, usually notifications come with data.id in URL too?
+        // Let's try to get from URL first as per docs template 'data.id_url'
+
+        let dataID = query["data.id"];
+        if (!dataID && body?.data?.id) {
+            dataID = body.data.id;
+        }
+
+        if (dataID && ts && hash) {
+            const manifest = `id:${dataID};request-id:${xRequestId};ts:${ts};`;
+
+            const hmac = createHmac('sha256', secret);
+            hmac.update(manifest);
+            const sha = hmac.digest('hex');
+
+            if (sha !== hash) {
+                console.error("HMAC verification failed");
+                return c.json({ error: "Invalid signature" }, 401);
+            }
+        }
+    }
 
     const paymentId = body?.data?.id || query["data.id"];
 
