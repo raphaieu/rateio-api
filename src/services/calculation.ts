@@ -215,9 +215,9 @@ export function calculateSplit(
         participantTotals,
         itemsTotalCents,
         extrasTotalCents,
-        grandTotalCents: checkTotal, // Total bill amount (food + service)
+        grandTotalCents: platformFeesCents,
         baseFeeCents,
         aiCents,
-        finalTotalToPayCents: platformFeesCents // Only what needs to be paid to the platform
+        finalTotalToPayCents: platformFeesCents
     };
 }

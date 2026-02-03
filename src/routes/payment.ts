@@ -118,10 +118,15 @@ app.post("/splits/:id/pay", authMiddleware, zValidator("json", z.object({
             qrCopyPaste: payment.point_of_interaction?.transaction_data?.qr_code,
         });
 
+        console.log("MP Response:", JSON.stringify(payment, null, 2));
+
+        const qrCodeBase64 = payment.point_of_interaction?.transaction_data?.qr_code_base64;
+        const qrCodeCopyPaste = payment.point_of_interaction?.transaction_data?.qr_code;
+
         return c.json({
             status: "PENDING",
-            qrCode: payment.point_of_interaction?.transaction_data?.qr_code_base64,
-            copyPaste: payment.point_of_interaction?.transaction_data?.qr_code,
+            qrCode: qrCodeBase64,
+            copyPaste: qrCodeCopyPaste,
             paymentId: payment.id
         });
     } catch (err: any) {
