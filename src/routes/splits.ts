@@ -199,9 +199,13 @@ app.put("/:id/items", zValidator("json", updateItemsSchema), async (c) => {
     if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
 
     await db.transaction(async (tx) => {
-        await tx.delete(items).where(eq(items.splitId, id)); // Cascades shares? Drizzle doesn't auto-cascade unless defined in DB, but assuming clean start for now or manual cleanup if needed. Note: itemShares has Cascade on Delete in schema usually.
-        // Actually, let's explicit delete shares if needed, but if FK has ON DELETE CASCADE it's fine.
-        // Given schema definition isn't visible, assuming safe or doing explicit.
+        const existingItems = await tx.select({ id: items.id }).from(items).where(eq(items.splitId, id));
+        const existingItemIds = existingItems.map(i => i.id);
+
+        if (existingItemIds.length > 0) {
+            await tx.delete(itemShares).where(inArray(itemShares.itemId, existingItemIds));
+            await tx.delete(items).where(eq(items.splitId, id));
+        }
         // Optimization: Batch Insert
 
         if (newItems.length === 0) return;
