@@ -8,6 +8,7 @@ MVP Backend for "Rateio Justo" - Bill Splitting App.
 - **Database**: Turso (LibSQL) + Drizzle ORM
 - **Auth**: Clerk (JWT)
 - **Payments**: Mercado Pago (PIX)
+- **Analytics**: Vercel Web Analytics
 
 ## Setup
 
@@ -58,6 +59,11 @@ npx tsx test/calculation.test.ts
 | POST | `/splits/:id/pay` | Pay via Wallet or PIX | Auth |
 | GET | `/public/:slug` | Read-only view of PAID split | Public |
 | POST | `/webhooks/mercadopago` | Handle payment notifications | Public |
+| GET | `/analytics/example` | Analytics integration example | Public |
+
+## Analytics
+
+This project includes Vercel Web Analytics integration for tracking HTML pages served by the API. See [docs/ANALYTICS.md](docs/ANALYTICS.md) for detailed setup and usage instructions.
 
 ## Deployment
 This project is configured for Vercel.

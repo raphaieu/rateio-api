@@ -8,6 +8,7 @@ import { logger } from "hono/logger";
 import splitsRoute from "./routes/splits.js";
 import paymentRoute from "./routes/payment.js";
 import publicRoute from "./routes/public.js";
+import analyticsExampleRoute from "./routes/analytics-example.js";
 
 const app = new Hono();
 
@@ -79,6 +80,7 @@ app.get("/pricing/current", (c) => {
 app.route("/splits", splitsRoute);
 app.route("/", paymentRoute);
 app.route("/public", publicRoute);
+app.route("/analytics", analyticsExampleRoute);
 
 app.get("/debug-db", async (c) => {
     try {
