@@ -82,7 +82,7 @@ app.route("/public", publicRoute);
 
 app.get("/debug-db", async (c) => {
     try {
-        const { createClient } = await import("@libsql/client");
+        const { createClient } = await import("@libsql/client/http");
         const { drizzle } = await import("drizzle-orm/libsql");
         const { splits } = await import("./db/schema.js");
 
