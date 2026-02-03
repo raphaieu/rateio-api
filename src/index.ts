@@ -15,9 +15,15 @@ app.use("*", logger());
 app.use(
     "*",
     cors({
-        origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
-        allowHeaders: ["Content-Type", "Authorization"],
+        origin: [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "https://rateio.ckao.in",
+            "https://rateio-web.vercel.app"
+        ],
+        allowHeaders: ["Content-Type", "Authorization", "x-signature", "x-request-id", "X-Idempotency-Key"],
         allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        credentials: true
     })
 );
 
