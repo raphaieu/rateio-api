@@ -31,9 +31,16 @@ export const authMiddleware = createMiddleware<{ Variables: AuthVariables }>(
 
             c.set("clerkUserId", verified.sub);
             await next();
-        } catch (err) {
+        } catch (err: any) {
             console.error("Auth error:", err);
-            throw new HTTPException(401, { message: "Unauthorized" });
+            // DEBUG MODE: Return actual error to client
+            return c.json({
+                error: "Auth Failed",
+                message: err.message || JSON.stringify(err),
+                stack: err.stack,
+                hasSecret: !!process.env.CLERK_SECRET_KEY,
+                keyPrefix: process.env.CLERK_SECRET_KEY ? process.env.CLERK_SECRET_KEY.substring(0, 7) : "NONE"
+            }, 401);
         }
     }
 );
