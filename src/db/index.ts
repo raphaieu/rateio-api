@@ -1,5 +1,6 @@
 import { drizzle } from "drizzle-orm/libsql";
-import { createClient } from "@libsql/client/web";
+// Node client para Vercel serverless; /web é para browser/edge
+import { createClient } from "@libsql/client";
 import * as schema from "./schema.js";
 
 if (!process.env.TURSO_DATABASE_URL) {

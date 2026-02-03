@@ -140,19 +140,57 @@ app.post("/splits/:id/pay", authMiddleware, zValidator("json", z.object({
 });
 
 // -----------------------------------------------------------------------------
+// GET /webhooks/mercadopago — verificação de URL / health (MP ou painel pode testar)
+// -----------------------------------------------------------------------------
+app.get("/webhooks/mercadopago", (c) => {
+    return c.json({ ok: true, message: "Webhook URL ativo" }, 200);
+});
+
+// -----------------------------------------------------------------------------
 // POST /webhooks/mercadopago
+// URL em produção: https://rateio-api.ckao.in/webhooks/mercadopago (registrar no painel MP)
+// Sempre respondemos 200 para o MP não reenviar; erros são logados.
 // -----------------------------------------------------------------------------
 app.post("/webhooks/mercadopago", async (c) => {
+    try {
+        return await handleMercadoPagoWebhook(c);
+    } catch (e: any) {
+        console.error("[WEBHOOK MP] Unhandled", e?.message ?? e, e?.stack);
+        return c.json({ ok: false, error: "Unhandled" }, 200);
+    }
+});
+
+async function handleMercadoPagoWebhook(c: any) {
     const secret = process.env.MERCADO_PAGO_WEBHOOK_SECRET || "";
-    const body = await c.req.json().catch(() => null);
+    let body: any = null;
+    try {
+        body = await c.req.json().catch(() => null);
+    } catch (e) {
+        console.error("[WEBHOOK MP] Failed to parse JSON body", e);
+        return c.json({ ok: false, error: "Invalid body" }, 200);
+    }
     const query = c.req.query();
+
+    // Debug: log recebimento (sem dados sensíveis)
+    const debugWebhook = process.env.DEBUG_WEBHOOK === "true";
+    console.log("[WEBHOOK MP] Received", {
+        hasBody: !!body,
+        bodyKeys: body ? Object.keys(body) : [],
+        bodyDataId: body?.data?.id,
+        queryKeys: Object.keys(query),
+        queryDataId: query["data.id"],
+        xSignature: !!c.req.header("x-signature"),
+        xRequestId: c.req.header("x-request-id") ?? null,
+    });
+    if (debugWebhook && body) console.log("[WEBHOOK MP] Body (debug):", JSON.stringify(body));
 
     // Verify signature
     const xSignature = c.req.header("x-signature");
     const xRequestId = c.req.header("x-request-id");
 
     if (process.env.NODE_ENV !== "development" && (!xSignature || !xRequestId)) {
-        return c.json({ error: "Missing signature" }, 401);
+        console.warn("[WEBHOOK MP] Rejected: missing signature or x-request-id");
+        return c.json({ ok: false, error: "Missing signature" }, 200);
     }
 
     if (secret && xSignature && xRequestId) {
@@ -190,32 +228,66 @@ app.post("/webhooks/mercadopago", async (c) => {
             const sha = hmac.digest('hex');
 
             if (sha !== hash) {
-                console.error("HMAC verification failed");
-                return c.json({ error: "Invalid signature" }, 401);
+                console.error("[WEBHOOK MP] HMAC verification failed");
+                return c.json({ ok: false, error: "Invalid signature" }, 200);
             }
         }
     }
 
     const paymentId = body?.data?.id || query["data.id"];
 
-    if (!paymentId) return c.json({ error: "Missing ID" }, 400);
+    if (!paymentId) {
+        console.warn("[WEBHOOK MP] Rejected: missing payment ID in body and query");
+        return c.json({ ok: false, error: "Missing ID" }, 200);
+    }
 
     try {
         const mpPayment = await MercadoPagoService.getPayment(paymentId);
 
-        if (mpPayment.status === "approved") {
+        // Debug: status que o MP retornou (Payments API: "approved"; Orders/Transactions: "processed" + status_detail "accredited")
+        const mpStatus = (mpPayment as any).status;
+        const mpStatusDetail = (mpPayment as any).status_detail ?? (mpPayment as any).status_detail;
+        console.log("[WEBHOOK MP] Payment from API", {
+            paymentId,
+            status: mpStatus,
+            status_detail: mpStatusDetail,
+        });
+        if (debugWebhook) console.log("[WEBHOOK MP] Full payment (debug):", JSON.stringify(mpPayment, null, 2));
+
+        // Pagamento creditado: "approved" (Payments API) ou "processed" + "accredited" (tabela de status que o usuário enviou)
+        const isPaid =
+            mpStatus === "approved" ||
+            (mpStatus === "processed" && (mpStatusDetail === "accredited" || !mpStatusDetail));
+
+        if (!isPaid) {
+            console.log("[WEBHOOK MP] Skipping – payment not credited", {
+                status: mpStatus,
+                status_detail: mpStatusDetail,
+                hint: "Aguardar MP enviar webhook com status approved/processed",
+            });
+            return c.json({ ok: true, message: "Payment not yet credited" });
+        }
+
+        if (isPaid) {
             const storedPayment = await db.query.payments.findFirst({
                 where: eq(payments.providerPaymentId, String(paymentId))
             });
 
             if (!storedPayment) {
-                // Unrecognized payment
+                console.log("[WEBHOOK MP] Payment not found in DB, ignoring", { paymentId });
                 return c.json({ ok: true });
             }
 
             if (storedPayment.status === "APPROVED") {
+                console.log("[WEBHOOK MP] Already processed", { paymentId });
                 return c.json({ ok: true, message: "Already processed" });
             }
+
+            console.log("[WEBHOOK MP] Processing payment", {
+                paymentId,
+                splitId: storedPayment.splitId,
+                amountCents: storedPayment.amountCentsTotal,
+            });
 
             // Process Payment
             await db.transaction(async (tx) => {
@@ -321,16 +393,18 @@ app.post("/webhooks/mercadopago", async (c) => {
                             publicSlug: randomUUID().slice(0, 8),
                             updatedAt: Math.floor(Date.now() / 1000)
                         }).where(eq(splits.id, split.id));
+                        console.log("[WEBHOOK MP] Split marked PAID", { splitId: split.id });
                     }
                 }
             });
         }
 
+        console.log("[WEBHOOK MP] Done OK", { paymentId });
         return c.json({ ok: true });
-    } catch (e) {
-        console.error(e);
-        return c.json({ error: "Internal Error" }, 500);
+    } catch (e: any) {
+        console.error("[WEBHOOK MP] Error", e?.message ?? e, e?.stack);
+        return c.json({ ok: false, error: "Internal Error" }, 200);
     }
-});
+}
 
 export default app;

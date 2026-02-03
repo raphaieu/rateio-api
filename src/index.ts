@@ -108,12 +108,14 @@ app.get("/debug-db", async (c) => {
     }
 });
 
-const port = 3000;
-console.log(`Server is running on port ${port}`);
-
-serve({
-    fetch: app.fetch,
-    port,
-});
+// Na Vercel não inicia servidor; só exporta o app para o runtime serverless
+if (typeof process !== "undefined" && process.env.VERCEL !== "1") {
+    const port = Number(process.env.PORT) || 3000;
+    console.log(`Server is running on port ${port}`);
+    serve({
+        fetch: app.fetch,
+        port,
+    });
+}
 
 export default app;
