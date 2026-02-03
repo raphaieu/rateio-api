@@ -209,13 +209,15 @@ export function calculateSplit(
         throw new Error(`Invariant failed: Sum of participants (${sumParticipants}) !== Total (${checkTotal})`);
     }
 
+    const platformFeesCents = baseFeeCents + aiCents;
+
     return {
         participantTotals,
         itemsTotalCents,
         extrasTotalCents,
-        grandTotalCents: checkTotal,
+        grandTotalCents: checkTotal, // Total bill amount (food + service)
         baseFeeCents,
         aiCents,
-        finalTotalToPayCents: checkTotal // Bill total only
+        finalTotalToPayCents: platformFeesCents // Only what needs to be paid to the platform
     };
 }
