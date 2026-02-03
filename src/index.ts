@@ -80,6 +80,34 @@ app.route("/splits", splitsRoute);
 app.route("/", paymentRoute);
 app.route("/public", publicRoute);
 
+app.get("/debug-db", async (c) => {
+    try {
+        // Try a simple query
+        // We import db from src/db/index.js which is already imported in splits route but let's assume it works here
+        const { db } = await import("./db/index.js");
+
+        // Just checking if we can run a select. Assuming 'splits' table exists.
+        // Or even simpler: execute raw SQL "SELECT 1" if possible with drizzle-orm raw or just findFirst
+        const { splits } = await import("./db/schema.js");
+
+        const result = await db.select().from(splits).limit(1);
+
+        return c.json({
+            status: "ok",
+            message: "Database connection successful",
+            usersCount: result.length,
+            // Don't leak data, just confirmation
+        });
+    } catch (e: any) {
+        return c.json({
+            status: "error",
+            message: "Database connection failed",
+            error: e.message,
+            stack: e.stack
+        }, 500);
+    }
+});
+
 const port = 3000;
 console.log(`Server is running on port ${port}`);
 
