@@ -33,6 +33,28 @@ app.get("/me", authMiddleware, (c) => {
     return c.json({ clerkUserId: c.get("clerkUserId") });
 });
 
+app.get("/debug-env", (c) => {
+    const vars = [
+        "TURSO_DATABASE_URL",
+        "TURSO_AUTH_TOKEN",
+        "CLERK_SECRET_KEY",
+        "CLERK_PUBLISHABLE_KEY",
+        "MERCADO_PAGO_ACCESS_TOKEN"
+    ];
+
+    const result: any = {};
+    vars.forEach(v => {
+        const val = process.env[v];
+        result[v] = {
+            exists: !!val,
+            length: val ? val.length : 0,
+            prefix: val ? val.substring(0, 5) + "..." : "N/A"
+        };
+    });
+
+    return c.json(result);
+});
+
 
 app.get("/pricing/current", (c) => {
     return c.json({
