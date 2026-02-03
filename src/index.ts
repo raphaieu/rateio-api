@@ -82,26 +82,29 @@ app.route("/public", publicRoute);
 
 app.get("/debug-db", async (c) => {
     try {
-        // Try a simple query
-        // We import db from src/db/index.js which is already imported in splits route but let's assume it works here
-        const { db } = await import("./db/index.js");
-
-        // Just checking if we can run a select. Assuming 'splits' table exists.
-        // Or even simpler: execute raw SQL "SELECT 1" if possible with drizzle-orm raw or just findFirst
+        const { createClient } = await import("@libsql/client");
+        const { drizzle } = await import("drizzle-orm/libsql");
         const { splits } = await import("./db/schema.js");
+
+        // HARDCODED TEST
+        const client = createClient({
+            url: "https://rateio-raphaieu.aws-us-east-1.turso.io",
+            authToken: "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3NzAwODU4NDUsImlkIjoiZGVkMzRlZTYtYmI2NS00MjcwLTlmZmEtMjAyYTIyNjI1MzllIiwicmlkIjoiYjNhOTMxOTEtMmZjYi00ZjYzLWIwYzctOWViMmZmMDgxMDIzIn0.26lM2KdCgI4fRFyxve2EMXGMqt0saQXmKwMVZPBa35M1keAy44xxd2hdjYYtCZPUYJm0JNUjYaF6bakcm6dvAA"
+        });
+
+        const db = drizzle(client);
 
         const result = await db.select().from(splits).limit(1);
 
         return c.json({
             status: "ok",
-            message: "Database connection successful",
-            usersCount: result.length,
-            // Don't leak data, just confirmation
+            message: "Database connection successful HARDCODED",
+            usersCount: result.length
         });
     } catch (e: any) {
         return c.json({
             status: "error",
-            message: "Database connection failed",
+            message: "Database connection failed HARDCODED",
             error: e.message,
             stack: e.stack
         }, 500);
