@@ -148,7 +148,7 @@ app.get("/webhooks/mercadopago", (c) => {
 
 // -----------------------------------------------------------------------------
 // POST /webhooks/mercadopago
-// URL em produção: https://rateio-api.ckao.in/webhooks/mercadopago (registrar no painel MP)
+// URL em produção: https://api-rateio.ckao.in/webhooks/mercadopago (registrar no painel MP)
 // Sempre respondemos 200 para o MP não reenviar; erros são logados.
 // -----------------------------------------------------------------------------
 app.post("/webhooks/mercadopago", async (c) => {
