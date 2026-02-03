@@ -82,31 +82,28 @@ app.route("/public", publicRoute);
 
 app.get("/debug-db", async (c) => {
     try {
-        const { createClient } = await import("@libsql/client/http");
-        const { drizzle } = await import("drizzle-orm/libsql");
+        // Import dynamically to ensure we catch initialization errors here if possible, 
+        // though top-level await in db/index.ts might have already thrown.
+        // But better to use the shared instance to test the REAL connection.
+        const { db } = await import("./db/index.js");
         const { splits } = await import("./db/schema.js");
-
-        // HARDCODED TEST
-        const client = createClient({
-            url: "https://rateio-raphaieu.aws-us-east-1.turso.io",
-            authToken: "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3NzAwODU4NDUsImlkIjoiZGVkMzRlZTYtYmI2NS00MjcwLTlmZmEtMjAyYTIyNjI1MzllIiwicmlkIjoiYjNhOTMxOTEtMmZjYi00ZjYzLWIwYzctOWViMmZmMDgxMDIzIn0.26lM2KdCgI4fRFyxve2EMXGMqt0saQXmKwMVZPBa35M1keAy44xxd2hdjYYtCZPUYJm0JNUjYaF6bakcm6dvAA"
-        });
-
-        const db = drizzle(client);
 
         const result = await db.select().from(splits).limit(1);
 
         return c.json({
             status: "ok",
-            message: "Database connection successful HARDCODED",
-            usersCount: result.length
+            message: "Database connection successful (Shared Instance)",
+            rows_found: result.length,
+            url_configured: !!process.env.TURSO_DATABASE_URL
         });
     } catch (e: any) {
         return c.json({
             status: "error",
-            message: "Database connection failed HARDCODED",
+            message: "Database connection failed",
             error: e.message,
-            stack: e.stack
+            stack: e.stack,
+            env_url_set: !!process.env.TURSO_DATABASE_URL,
+            env_token_set: !!process.env.TURSO_AUTH_TOKEN
         }, 500);
     }
 });
