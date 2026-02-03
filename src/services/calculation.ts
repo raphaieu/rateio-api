@@ -215,7 +215,7 @@ export function calculateSplit(
         participantTotals,
         itemsTotalCents,
         extrasTotalCents,
-        grandTotalCents: platformFeesCents,
+        grandTotalCents: checkTotal,
         baseFeeCents,
         aiCents,
         finalTotalToPayCents: platformFeesCents
