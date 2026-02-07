@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { authMiddleware } from "../middleware/auth.js";
 import { db } from "../db/index.js";
-import { splits, participants, items, itemShares, extras, splitCosts } from "../db/schema.js";
+import { splits, participants, items, itemShares, extras, splitCosts, payments } from "../db/schema.js";
 import { eq, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -82,6 +82,42 @@ app.patch("/:id", zValidator("json", z.object({
     }
 
     return c.json({ success: true });
+});
+
+// -----------------------------------------------------------------------------
+// DELETE /splits/:id
+// -----------------------------------------------------------------------------
+app.delete("/:id", async (c) => {
+    const id = c.req.param("id");
+    const userId = c.get("clerkUserId");
+
+    const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
+    if (!split) return c.json({ error: "Not found" }, 404);
+    if (split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+
+    await db.transaction(async (tx) => {
+        // Delete shares/items (manual cleanup — do not rely on FK cascade being enabled)
+        const existingItems = await tx.select({ id: items.id }).from(items).where(eq(items.splitId, id));
+        const itemIds = existingItems.map(i => i.id);
+
+        if (itemIds.length > 0) {
+            await tx.delete(itemShares).where(inArray(itemShares.itemId, itemIds));
+        }
+
+        await tx.delete(items).where(eq(items.splitId, id));
+        await tx.delete(participants).where(eq(participants.splitId, id));
+        await tx.delete(extras).where(eq(extras.splitId, id));
+        await tx.delete(splitCosts).where(eq(splitCosts.splitId, id));
+
+        // Payments has FK to splits without onDelete:cascade; detach to allow deleting split.
+        await tx.update(payments)
+            .set({ splitId: null, updatedAt: Math.floor(Date.now() / 1000) })
+            .where(eq(payments.splitId, id));
+
+        await tx.delete(splits).where(eq(splits.id, id));
+    });
+
+    return c.body(null, 204);
 });
 
 // -----------------------------------------------------------------------------

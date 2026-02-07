@@ -196,8 +196,9 @@ async function handleMercadoPagoWebhook(c: any) {
     if (secret && xSignature && xRequestId) {
         // Parse signature
         const parts = xSignature.split(',');
-        let ts, hash;
-        parts.forEach(part => {
+        let ts: string | undefined;
+        let hash: string | undefined;
+        parts.forEach((part: string) => {
             const [key, value] = part.split('=');
             if (key && value) {
                 const k = key.trim();
