@@ -9,6 +9,7 @@ import splitsRoute from "./routes/splits.js";
 import paymentRoute from "./routes/payment.js";
 import publicRoute from "./routes/public.js";
 import analyticsExampleRoute from "./routes/analytics-example.js";
+import geoRoute from "./routes/geo.js";
 
 const app = new Hono();
 
@@ -78,6 +79,7 @@ app.get("/pricing/current", (c) => {
 });
 
 app.route("/splits", splitsRoute);
+app.route("/geo", geoRoute);
 app.route("/", paymentRoute);
 app.route("/public", publicRoute);
 app.route("/analytics", analyticsExampleRoute);

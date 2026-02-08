@@ -65,19 +65,54 @@ app.get("/:id", async (c) => {
 // PATCH /splits/:id
 // -----------------------------------------------------------------------------
 app.patch("/:id", zValidator("json", z.object({
-    name: z.string().optional()
+    name: z.string().optional(),
+    latitude: z.number().nullable().optional(),
+    longitude: z.number().nullable().optional(),
+    placeProvider: z.string().nullable().optional(),
+    placeId: z.string().nullable().optional(),
+    placeName: z.string().nullable().optional(),
+    placeDisplayName: z.string().nullable().optional(),
 })), async (c) => {
     const id = c.req.param("id");
     const userId = c.get("clerkUserId");
-    const { name } = c.req.valid("json");
+    const {
+        name,
+        latitude,
+        longitude,
+        placeProvider,
+        placeId,
+        placeName,
+        placeDisplayName,
+    } = c.req.valid("json");
 
     const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
     if (!split) return c.json({ error: "Not found" }, 404);
     if (split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
 
-    if (name) {
+    const updates: Partial<typeof splits.$inferInsert> = {
+        updatedAt: Math.floor(Date.now() / 1000),
+    };
+
+    if (name !== undefined) updates.name = name;
+    if (latitude !== undefined) updates.latitude = latitude;
+    if (longitude !== undefined) updates.longitude = longitude;
+    if (placeProvider !== undefined) updates.placeProvider = placeProvider;
+    if (placeId !== undefined) updates.placeId = placeId;
+    if (placeName !== undefined) updates.placeName = placeName;
+    if (placeDisplayName !== undefined) updates.placeDisplayName = placeDisplayName;
+
+    // Only persist if there is at least one real field besides updatedAt
+    if (
+        updates.name !== undefined ||
+        updates.latitude !== undefined ||
+        updates.longitude !== undefined ||
+        updates.placeProvider !== undefined ||
+        updates.placeId !== undefined ||
+        updates.placeName !== undefined ||
+        updates.placeDisplayName !== undefined
+    ) {
         await db.update(splits)
-            .set({ name, updatedAt: Math.floor(Date.now() / 1000) })
+            .set(updates)
             .where(eq(splits.id, id));
     }
 

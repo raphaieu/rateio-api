@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index, real } from "drizzle-orm/sqlite-core";
 import { sql, relations } from "drizzle-orm";
 
 // -----------------------------------------------------------------------------
@@ -14,6 +14,12 @@ export const splits = sqliteTable(
             .notNull()
             .default("DRAFT"),
         receiptImageUrl: text("receipt_image_url"),
+        latitude: real("latitude"),
+        longitude: real("longitude"),
+        placeProvider: text("place_provider"),
+        placeId: text("place_id"),
+        placeName: text("place_name"),
+        placeDisplayName: text("place_display_name"),
         publicSlug: text("public_slug").unique(),
         createdAt: integer("created_at")
             .notNull()

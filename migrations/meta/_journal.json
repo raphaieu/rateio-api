@@ -8,6 +8,20 @@
       "when": 1769903771500,
       "tag": "0000_petite_dust",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1770564592235,
+      "tag": "0001_dark_shadow_king",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1770565076244,
+      "tag": "0002_flaky_dreaming_celestial",
+      "breakpoints": true
     }
   ]
 }
