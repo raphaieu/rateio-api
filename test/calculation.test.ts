@@ -52,6 +52,32 @@ const mkItem = (id: string, amount: number): Item => ({ id, name: "Item", amount
     console.log("Test 2 Passed: Remainder Handling");
 }
 
+// Test 2b: Balanced remainder across multiple items (avoid bias)
+{
+    const ps = [mkPart("p1", 0), mkPart("p2", 1), mkPart("p3", 2)];
+    // Three items, each 1000 / 3 = 333 r 1. The extra cent should rotate so totals equalize.
+    const is = [mkItem("i1", 1000), mkItem("i2", 1000), mkItem("i3", 1000)];
+    const shares = [
+        { itemId: "i1", participantId: "p1" },
+        { itemId: "i1", participantId: "p2" },
+        { itemId: "i1", participantId: "p3" },
+        { itemId: "i2", participantId: "p1" },
+        { itemId: "i2", participantId: "p2" },
+        { itemId: "i2", participantId: "p3" },
+        { itemId: "i3", participantId: "p1" },
+        { itemId: "i3", participantId: "p2" },
+        { itemId: "i3", participantId: "p3" },
+    ];
+
+    const result = calculateSplit(ps, is, shares, []);
+
+    assert.equal(result.participantTotals["p1"], 1000);
+    assert.equal(result.participantTotals["p2"], 1000);
+    assert.equal(result.participantTotals["p3"], 1000);
+    assert.equal(result.grandTotalCents, 3000);
+    console.log("Test 2b Passed: Balanced Remainder Across Items");
+}
+
 // Test 3: Service Fee (10%)
 {
     const ps = [mkPart("p1")];

@@ -153,17 +153,40 @@ export function calculateSplit(
             throw new Error(`Item "${item.name}" has no valid consumers`);
         }
 
-        // Sort consumers for deterministic attribution of remainder
+        // Sort consumers for determinism
         sortParticipants(validConsumers);
 
-        const distributed = distributeCents(item.amountCents, validConsumers.length);
+        // Balanced remainder distribution:
+        // - Everyone gets the base share
+        // - The remainder cents go to the consumers with the lowest running total so far
+        // This avoids a bias where the "first" participant always gets the extra cent across many items.
+        const count = validConsumers.length;
+        const base = Math.floor(item.amountCents / count);
+        const remainder = item.amountCents % count;
+
+        const totalsSnapshot = new Map<string, number>();
+        validConsumers.forEach((pid) => totalsSnapshot.set(pid, itemsOnlyTotals[pid] ?? 0));
+
+        const remainderRecipients = remainder > 0
+            ? [...validConsumers].sort((a, b) => {
+                const ta = totalsSnapshot.get(a) ?? 0;
+                const tb = totalsSnapshot.get(b) ?? 0;
+                if (ta !== tb) return ta - tb; // lower total first
+                const pA = participantMap.get(a)!;
+                const pB = participantMap.get(b)!;
+                if (pA.sortOrder !== pB.sortOrder) return pA.sortOrder - pB.sortOrder;
+                return pA.id.localeCompare(pB.id);
+            }).slice(0, remainder)
+            : [];
+
+        const remainderSet = new Set(remainderRecipients);
         const rawShare: Fraction = normalizeFraction({
             num: BigInt(item.amountCents),
             den: BigInt(validConsumers.length),
         });
 
-        validConsumers.forEach((pid, idx) => {
-            const share = distributed[idx];
+        validConsumers.forEach((pid) => {
+            const share = base + (remainderSet.has(pid) ? 1 : 0);
             participantTotals[pid] += share;
             itemsOnlyTotals[pid] += share;
 
