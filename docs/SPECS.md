@@ -7,7 +7,7 @@ Fornecer uma API simples e segura para suportar o MVP do Rateio Justo:
 - paywall via PIX
 - wallet de créditos
 - link público read-only
-- geo: reverse geocoding e busca de lugares para definir nome do rateio (Nominatim)
+- geo: reverse geocoding e busca de lugares para definir nome do rateio (Google Places/Geocoding; fallback Nominatim)
 
 ---
 
@@ -137,8 +137,8 @@ Fornecer uma API simples e segura para suportar o MVP do Rateio Justo:
 - PATCH /splits/:id (nome e campos de geolocalização: latitude, longitude, placeProvider, placeId, placeName, placeDisplayName)
 
 ### Geo (auth obrigatório)
-- GET /geo/reverse?lat=&lng= — reverse geocoding (Nominatim); retorna sugestão de nome do lugar.
-- GET /geo/search?q=&limit=&lat=&lng= — busca de lugares por texto; opcional lat/lng para priorizar resultados próximos.
+- GET /geo/reverse?lat=&lng= — reverse geocoding; retorna sugestão de nome do lugar (preferência: Google Places/Geocoding).
+- GET /geo/search?q=&limit=&lat=&lng= — busca de lugares por texto; opcional lat/lng para priorizar resultados próximos (preferência: Google Places).
 
 ### Participants / Items / Extras
 - PUT /splits/:id/participants
@@ -176,5 +176,6 @@ Fornecer uma API simples e segura para suportar o MVP do Rateio Justo:
 - MERCADO_PAGO_WEBHOOK_SECRET
 - BASE_FEE_CENTS
 - AI_TEXT_TIER_* (tiers)
+- GOOGLE_MAPS_API_KEY (opcional; se setada, usa Google Places/Geocoding em `/geo/*`)
 - NOMINATIM_BASE_URL (opcional; default https://nominatim.openstreetmap.org)
 - NOMINATIM_USER_AGENT (opcional; para respeito à política de uso do Nominatim)

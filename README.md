@@ -23,6 +23,7 @@ MVP Backend for "Rateio Justo" - Bill Splitting App.
    - `TURSO_DATABASE_URL` & `TURSO_AUTH_TOKEN` (from Turso CLI)
    - `CLERK_SECRET_KEY` (from Clerk Dashboard)
    - `MERCADO_PAGO_ACCESS_TOKEN` (from Mercado Pago Developers)
+   - `GOOGLE_MAPS_API_KEY` *(opcional, recomendado)*: habilita `/geo/*` via Google Places/Geocoding. Se não setar, a API usa Nominatim como fallback.
 
 3. **Database Migrations**
    Generate and push migrations to Turso:
