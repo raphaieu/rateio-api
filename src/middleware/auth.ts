@@ -34,6 +34,8 @@ export const authMiddleware = createMiddleware<{ Variables: AuthVariables }>(
         } catch (err: any) {
             console.error("Auth error:", err);
             // DEBUG MODE: Return actual error to client
+            // TODO(cleanup): remover stack/hasSecret/keyPrefix do response quando o debug terminar.
+            // Ver: docs/MAINTENANCE.md
             return c.json({
                 error: "Auth Failed",
                 message: err.message || JSON.stringify(err),
