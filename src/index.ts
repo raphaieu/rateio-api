@@ -10,10 +10,18 @@ import paymentRoute from "./routes/payment.js";
 import publicRoute from "./routes/public.js";
 import analyticsExampleRoute from "./routes/analytics-example.js";
 import geoRoute from "./routes/geo.js";
+import { randomUUID } from "node:crypto";
 
 const app = new Hono();
 
 app.use("*", logger());
+// Correlation ID for debugging across client <-> Vercel logs
+app.use("*", async (c, next) => {
+    const incoming = c.req.header("x-request-id");
+    const reqId = incoming && incoming.trim().length > 0 ? incoming.trim() : randomUUID();
+    c.header("x-request-id", reqId);
+    await next();
+});
 app.use(
     "*",
     cors({

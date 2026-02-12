@@ -199,7 +199,7 @@ app.post("/", zValidator("json", z.object({
 // -----------------------------------------------------------------------------
 const updateParticipantsSchema = z.object({
     participants: z.array(z.object({
-        id: z.string().optional(),
+        id: z.string().uuid().optional(),
         name: z.string(),
     }))
 });
@@ -221,10 +221,13 @@ app.put("/:id/participants", zValidator("json", updateParticipantsSchema), async
 
         for (let i = 0; i < newParts.length; i++) {
             const p = newParts[i];
-            const pId = p.id && currentIds.has(p.id) ? p.id : randomUUID();
+            // Preserve client-provided IDs for NEW participants to keep shares consistent
+            // (web generates UUIDs optimistically).
+            const incomingId = p.id?.trim();
+            const pId = incomingId ? incomingId : randomUUID();
             incomingIds.add(pId);
 
-            if (p.id && currentIds.has(p.id)) {
+            if (incomingId && currentIds.has(incomingId)) {
                 await tx.update(participants)
                     .set({ name: p.name, sortOrder: i })
                     .where(eq(participants.id, pId));
@@ -269,46 +272,92 @@ app.put("/:id/items", zValidator("json", updateItemsSchema), async (c) => {
     if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
     if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
 
-    await db.transaction(async (tx) => {
-        const existingItems = await tx.select({ id: items.id }).from(items).where(eq(items.splitId, id));
-        const existingItemIds = existingItems.map(i => i.id);
+    // Validate that consumerIds reference existing participants of this split.
+    // Otherwise we might fail later with FK errors (or worse: appear to "not save").
+    const splitParticipants = await db
+        .select({ id: participants.id })
+        .from(participants)
+        .where(eq(participants.splitId, id));
+    const participantIdSet = new Set(splitParticipants.map(p => p.id));
 
-        if (existingItemIds.length > 0) {
-            await tx.delete(itemShares).where(inArray(itemShares.itemId, existingItemIds));
-            await tx.delete(items).where(eq(items.splitId, id));
+    const invalidConsumerIds = new Set<string>();
+    for (const item of newItems) {
+        for (const cid of item.consumerIds) {
+            if (!participantIdSet.has(cid)) invalidConsumerIds.add(cid);
         }
-        // Optimization: Batch Insert
+    }
+    if (invalidConsumerIds.size > 0) {
+        return c.json(
+            {
+                error: "Invalid consumerIds",
+                invalidConsumerIds: Array.from(invalidConsumerIds),
+            },
+            400
+        );
+    }
 
-        if (newItems.length === 0) return;
+    try {
+        await db.transaction(async (tx) => {
+            const existingItems = await tx.select({ id: items.id }).from(items).where(eq(items.splitId, id));
+            const existingItemIds = existingItems.map(i => i.id);
 
-        const batchItems = [];
-        const batchShares = [];
-
-        for (const item of newItems) {
-            const itemId = item.id || randomUUID();
-            batchItems.push({
-                id: itemId,
-                splitId: id,
-                name: item.name,
-                amountCents: item.amountCents
-            });
-
-            for (const cid of item.consumerIds) {
-                batchShares.push({
-                    itemId: itemId,
-                    participantId: cid
-                });
+            if (existingItemIds.length > 0) {
+                await tx.delete(itemShares).where(inArray(itemShares.itemId, existingItemIds));
+                await tx.delete(items).where(eq(items.splitId, id));
             }
-        }
+            // Optimization: Batch Insert
 
-        if (batchItems.length > 0) {
-            await tx.insert(items).values(batchItems);
-        }
+            if (newItems.length === 0) return;
 
-        if (batchShares.length > 0) {
-            await tx.insert(itemShares).values(batchShares);
+            const batchItems = [];
+            const batchShares = [];
+
+            for (const item of newItems) {
+                const itemId = item.id || randomUUID();
+                batchItems.push({
+                    id: itemId,
+                    splitId: id,
+                    name: item.name,
+                    amountCents: item.amountCents
+                });
+
+                for (const cid of item.consumerIds) {
+                    batchShares.push({
+                        itemId: itemId,
+                        participantId: cid
+                    });
+                }
+            }
+
+            if (batchItems.length > 0) {
+                await tx.insert(items).values(batchItems);
+            }
+
+            if (batchShares.length > 0) {
+                await tx.insert(itemShares).values(batchShares);
+            }
+        });
+    } catch (e: any) {
+        // In case something slips past validation (race conditions), return a debuggable 400
+        const code = e?.code || e?.cause?.code;
+        if (code === "SQLITE_CONSTRAINT") {
+            console.error("[PUT /splits/:id/items] SQLite constraint failed", {
+                splitId: id,
+                itemsCount: newItems.length,
+                sharesCount: newItems.reduce((acc, it) => acc + (it.consumerIds?.length || 0), 0),
+                requestId: c.res.headers.get("x-request-id"),
+            });
+            return c.json(
+                {
+                    error: "Foreign key constraint failed",
+                    hint: "Possível corrida: participantes ainda não persistidos ao salvar consumerIds.",
+                },
+                400
+            );
         }
-    });
+        console.error("[PUT /splits/:id/items] Unexpected error", e);
+        throw e;
+    }
 
     return c.json({ success: true });
 });
