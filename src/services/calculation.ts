@@ -92,9 +92,8 @@ function formatBRLFromFraction(num: bigint, den: bigint, extraDecimals: number):
         remainder = remainder % d;
         fracDigits += digit.toString();
     }
-    const hasMore = remainder !== 0n;
-    // pt-BR: decimal separator is ","
-    return `R$ ${intStr},${fracDigits}${hasMore ? "…" : ""}`;
+    // pt-BR: decimal separator is "," — 5 casas fixas, sem reticências, para alinhamento
+    return `R$ ${intStr},${fracDigits}`;
 }
 
 export function calculateSplit(
@@ -351,7 +350,7 @@ export function calculateSplit(
     // Format raw totals in BRL (reais) with digits beyond cents, without rounding.
     // participantTotalsRawCents is in cents, so convert to reais by dividing by 100.
     const participantTotalsRaw: Record<string, string> = {};
-    const RAW_DECIMALS = 6; // 6 casas após a vírgula (mais que centavos)
+    const RAW_DECIMALS = 5; // 5 casas fixas para alinhamento visual
     for (const p of participantsList) {
         const f = participantTotalsRawCents[p.id];
         // reais = (cents) / 100 => num / (den*100)
