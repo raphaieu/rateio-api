@@ -403,8 +403,12 @@ app.put("/:id/extras", zValidator("json", updateExtrasSchema), async (c) => {
     return c.json({ success: true });
 });
 
+import { OpenAIService } from "../services/openai.js";
+
+// ... (existing code up to ai-parse)
+
 // -----------------------------------------------------------------------------
-// POST /splits/:id/ai-parse (Stub)
+// POST /splits/:id/ai-parse (Real implementation)
 // -----------------------------------------------------------------------------
 app.post("/:id/ai-parse", zValidator("json", z.object({
     text: z.string()
@@ -417,9 +421,9 @@ app.post("/:id/ai-parse", zValidator("json", z.object({
     if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
     if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
 
+    // Calculate cost based on length (keep existing tiers logic or simplify)
     const len = text.length;
     let cost = 0;
-
     const t1Max = parseInt(process.env.AI_TEXT_TIER_1_MAX_CHARS || "1000");
     const t1Cost = parseInt(process.env.AI_TEXT_TIER_1_CENTS || "50");
     const t2Max = parseInt(process.env.AI_TEXT_TIER_2_MAX_CHARS || "5000");
@@ -429,17 +433,113 @@ app.post("/:id/ai-parse", zValidator("json", z.object({
     else if (len <= t2Max) cost = t2Cost;
     else cost = parseInt(process.env.AI_TEXT_TIER_3_CENTS || "200");
 
-    const mockItems = text.split("\n")
-        .filter(line => line.trim().length > 0)
-        .map(line => ({
-            name: line.trim(),
-            amountCents: 1000
-        }));
+    try {
+        const items = await OpenAIService.parseItemsFromText(text);
+        return c.json({
+            costCents: cost,
+            parsedItems: items
+        });
+    } catch (e: any) {
+        console.error("[POST /splits/:id/ai-parse] IA Error:", e);
+        return c.json({ error: e.message || "Falha ao processar com IA" }, 500);
+    }
+});
 
-    return c.json({
-        costCents: cost,
-        parsedItems: mockItems
-    });
+// -----------------------------------------------------------------------------
+// POST /splits/:id/voice-parse (Audio -> Items)
+// -----------------------------------------------------------------------------
+app.post("/:id/voice-parse", async (c) => {
+    const id = c.req.param("id");
+    const userId = c.get("clerkUserId");
+
+    const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
+    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+    if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
+
+    const body = await c.req.parseBody();
+    const audioFile = body["audio"];
+
+
+    // Check for File or Blob-like object (lenient check)
+    if (!audioFile || (!(audioFile instanceof File) && typeof (audioFile as any).slice !== 'function')) {
+        return c.json({ error: "Arquivo de áudio não encontrado ou inválido" }, 400);
+    }
+
+    try {
+        const transcript = await OpenAIService.transcribeAudio(audioFile as any);
+        const items = await OpenAIService.parseItemsFromText(transcript);
+
+        return c.json({
+            transcript,
+            parsedItems: items,
+            costCents: parseInt(process.env.AI_TEXT_TIER_1_CENTS || "50") // Custo base fixo por áudio no MVP
+        });
+    } catch (e: any) {
+        console.error("[POST /splits/:id/voice-parse] IA Error:", e);
+        return c.json({ error: e.message || "Falha ao processar áudio" }, 500);
+    }
+});
+
+// -----------------------------------------------------------------------------
+// POST /splits/:id/ocr-parse (Image -> Items)
+// -----------------------------------------------------------------------------
+app.post("/:id/ocr-parse", async (c) => {
+    const id = c.req.param("id");
+    const userId = c.get("clerkUserId");
+
+    const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
+    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+    if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
+
+    const body = await c.req.parseBody();
+    const imageFile = body["image"];
+
+
+    if (!imageFile || (!(imageFile instanceof File) && typeof (imageFile as any).slice !== 'function')) {
+        return c.json({ error: "Imagem não encontrada ou inválida" }, 400);
+    }
+
+    try {
+        const buffer = await (imageFile as any).arrayBuffer();
+        const base64 = Buffer.from(buffer).toString("base64");
+        const items = await OpenAIService.parseItemsFromImage(base64);
+
+        return c.json({
+            parsedItems: items,
+            costCents: 150 // Custo fixo por OCR no MVP (GPT-4o é mais caro)
+        });
+    } catch (e: any) {
+        console.error("[POST /splits/:id/ocr-parse] IA Error:", e);
+        return c.json({ error: e.message || "Falha ao processar imagem" }, 500);
+    }
+});
+
+// -----------------------------------------------------------------------------
+// POST /splits/:id/transcribe (Audio -> Names)
+// -----------------------------------------------------------------------------
+app.post("/:id/transcribe", async (c) => {
+    const id = c.req.param("id");
+    const userId = c.get("clerkUserId");
+
+    const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
+    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+
+    const body = await c.req.parseBody();
+    const audioFile = body["audio"];
+
+    if (!audioFile || !(audioFile instanceof File)) {
+        return c.json({ error: "Arquivo de áudio não encontrado" }, 400);
+    }
+
+    try {
+        const transcript = await OpenAIService.transcribeAudio(audioFile);
+        const names = await OpenAIService.parseParticipantsFromText(transcript);
+
+        return c.json({ transcript, names });
+    } catch (e: any) {
+        console.error("[POST /splits/:id/transcribe] IA Error:", e);
+        return c.json({ error: e.message || "Falha ao transcrever" }, 500);
+    }
 });
 
 // -----------------------------------------------------------------------------

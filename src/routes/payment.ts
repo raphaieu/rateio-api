@@ -118,7 +118,6 @@ app.post("/splits/:id/pay", authMiddleware, zValidator("json", z.object({
             qrCopyPaste: payment.point_of_interaction?.transaction_data?.qr_code,
         });
 
-        console.log("MP Response:", JSON.stringify(payment, null, 2));
 
         const qrCodeBase64 = payment.point_of_interaction?.transaction_data?.qr_code_base64;
         const qrCodeCopyPaste = payment.point_of_interaction?.transaction_data?.qr_code;
