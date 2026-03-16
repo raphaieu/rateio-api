@@ -31,7 +31,7 @@ app.use(
             "https://rateio.ckao.in",
             "https://rateio-web.vercel.app"
         ],
-        allowHeaders: ["Content-Type", "Authorization", "x-signature", "x-request-id", "X-Idempotency-Key"],
+        allowHeaders: ["Content-Type", "Authorization", "x-signature", "x-request-id", "X-Idempotency-Key", "x-guest-id"],
         allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         credentials: true
     })
@@ -40,7 +40,10 @@ app.use(
 app.get("/health", (c) => c.text("ok"));
 
 app.get("/me", authMiddleware, (c) => {
-    return c.json({ clerkUserId: c.get("clerkUserId") });
+    return c.json({
+        clerkUserId: c.get("clerkUserId") || null,
+        guestId: c.get("guestId") || null
+    });
 });
 
 app.get("/debug-env", (c) => {

@@ -9,7 +9,13 @@ import { MercadoPagoService } from "../services/mercadopago.js";
 import { WalletService } from "../services/wallet.js";
 import { randomUUID, createHmac } from "node:crypto";
 
-const app = new Hono<{ Variables: { clerkUserId: string } }>();
+const app = new Hono<{ Variables: { clerkUserId?: string, guestId?: string } }>();
+
+const getUserIdOrGuestId = (c: any) => {
+    const userId = c.get("clerkUserId");
+    const guestId = c.get("guestId");
+    return { userId, guestId };
+};
 
 // -----------------------------------------------------------------------------
 // POST /splits/:id/pay
@@ -19,7 +25,7 @@ app.post("/splits/:id/pay", authMiddleware, zValidator("json", z.object({
     payWithWallet: z.boolean().default(true) // If true, use available balance first
 })), async (c) => {
     const id = c.req.param("id");
-    const userId = c.get("clerkUserId");
+    const { userId: currentUserId, guestId } = getUserIdOrGuestId(c);
     const { topupCents, payWithWallet } = c.req.valid("json");
 
     // 1. Get Split and Costs
@@ -29,8 +35,20 @@ app.post("/splits/:id/pay", authMiddleware, zValidator("json", z.object({
     });
 
     if (!split) return c.json({ error: "Not found" }, 404);
-    if (split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+
+    if (currentUserId) {
+        if (split.ownerClerkUserId !== currentUserId) return c.json({ error: "Unauthorized" }, 403);
+    } else {
+        if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
+    }
+
     if (split.status === "PAID") return c.json({ error: "Already paid" }, 400);
+
+    const userId = currentUserId || guestId!;
+    // For wallet, we might not have a wallet for guest yet? Or we use guestId as ownerClerkUserId in wallet table?
+    // Actually schema for 'wallets' uses 'ownerClerkUserId'. 
+    // If we want to support wallet for guest, we should rename or use as is but might be confusing.
+    // For now, let's assume guests don't have wallets (balance=0 always).
 
     const totalCost = split.splitCosts?.totalCents ?? 0;
     if (totalCost === 0 && !split.splitCosts) return c.json({ error: "Split not calculated" }, 400);
@@ -347,17 +365,24 @@ async function handleMercadoPagoWebhook(c: any) {
                         // Reimplementing logic for atomic tx:
 
                         // 1. Get Wallet
-                        let wallet = await tx.query.wallets.findFirst({ where: eq(wallets.ownerClerkUserId, storedPayment.ownerClerkUserId) });
+                        const ownerId = storedPayment.ownerClerkUserId || storedPayment.ownerGuestId!;
+
+                        let wallet = await tx.query.wallets.findFirst({
+                            where: eq(wallets.ownerClerkUserId, ownerId)
+                        });
                         if (!wallet) {
-                            await tx.insert(wallets).values({ ownerClerkUserId: storedPayment.ownerClerkUserId, balanceCents: 0 });
-                            wallet = { ownerClerkUserId: storedPayment.ownerClerkUserId, balanceCents: 0 };
+                            await tx.insert(wallets).values({
+                                ownerClerkUserId: ownerId,
+                                balanceCents: 0
+                            });
+                            wallet = { ownerClerkUserId: ownerId, balanceCents: 0 };
                         }
 
                         // 2. Topup (Pix content)
                         const afterTopup = wallet.balanceCents + totalPaid;
                         await tx.insert(walletLedger).values({
                             id: randomUUID(),
-                            ownerClerkUserId: storedPayment.ownerClerkUserId,
+                            ownerClerkUserId: ownerId,
                             type: "TOPUP",
                             amountCents: totalPaid,
                             refType: "PAYMENT",
@@ -369,23 +394,22 @@ async function handleMercadoPagoWebhook(c: any) {
                         const finalBalance = afterTopup - cost;
 
                         if (finalBalance < 0) {
-                            // Should not happen if logic correct, unless split price changed?
-                            // "Preço ... congelado na revisão".
                             console.error("Negative balance after payment!", finalBalance);
-                            // Allow negative? No.
                             throw new Error("Mathematical error in payment application");
                         }
 
                         await tx.insert(walletLedger).values({
                             id: randomUUID(),
-                            ownerClerkUserId: storedPayment.ownerClerkUserId,
+                            ownerClerkUserId: ownerId,
                             type: "CHARGE",
                             amountCents: cost,
                             refType: "SPLIT_FEE",
                             refId: split.id
                         });
 
-                        await tx.update(wallets).set({ balanceCents: finalBalance }).where(eq(wallets.ownerClerkUserId, storedPayment.ownerClerkUserId));
+                        await tx.update(wallets)
+                            .set({ balanceCents: finalBalance })
+                            .where(eq(wallets.ownerClerkUserId, ownerId));
 
                         // 4. Mark Split Paid
                         await tx.update(splits).set({

@@ -8,7 +8,8 @@ export const splits = sqliteTable(
     "splits",
     {
         id: text("id").primaryKey(), // Using CUID or UUID at application level
-        ownerClerkUserId: text("owner_clerk_user_id").notNull(),
+        ownerClerkUserId: text("owner_clerk_user_id"),
+        ownerGuestId: text("owner_guest_id"),
         name: text("name"),
         status: text("status", { enum: ["DRAFT", "PAID"] })
             .notNull()
@@ -163,7 +164,8 @@ export const payments = sqliteTable(
     "payments",
     {
         id: text("id").primaryKey(),
-        ownerClerkUserId: text("owner_clerk_user_id").notNull(),
+        ownerClerkUserId: text("owner_clerk_user_id"),
+        ownerGuestId: text("owner_guest_id"),
         splitId: text("split_id").references(() => splits.id),
         status: text("status", { enum: ["PENDING", "APPROVED", "REJECTED"] })
             .notNull()
@@ -188,6 +190,31 @@ export const payments = sqliteTable(
 );
 
 // -----------------------------------------------------------------------------
+// AI Usage Tracking
+// -----------------------------------------------------------------------------
+export const aiUsage = sqliteTable(
+    "ai_usage",
+    {
+        id: text("id").primaryKey(),
+        splitId: text("split_id")
+            .notNull()
+            .references(() => splits.id, { onDelete: "cascade" }),
+        feature: text("feature").notNull(), // e.g., "OCR", "VOICE", "AI_PARSE"
+        model: text("model").notNull(),
+        promptTokens: integer("prompt_tokens"),
+        completionTokens: integer("completion_tokens"),
+        totalTokens: integer("total_tokens"),
+        durationSeconds: integer("duration_seconds"), // For Whisper/Audio
+        createdAt: integer("created_at")
+            .notNull()
+            .default(sql`(unixepoch())`),
+    },
+    (table) => ({
+        splitIdx: index("ai_usage_split_idx").on(table.splitId),
+    })
+);
+
+// -----------------------------------------------------------------------------
 // Relations
 // -----------------------------------------------------------------------------
 
@@ -197,6 +224,14 @@ export const splitsRelations = relations(splits, ({ one, many }) => ({
     items: many(items),
     extras: many(extras),
     payments: many(payments),
+    aiUsage: many(aiUsage),
+}));
+
+export const aiUsageRelations = relations(aiUsage, ({ one }) => ({
+    split: one(splits, {
+        fields: [aiUsage.splitId],
+        references: [splits.id],
+    }),
 }));
 
 export const splitCostsRelations = relations(splitCosts, ({ one }) => ({

@@ -1,25 +1,40 @@
 import { Hono } from "hono";
 import { authMiddleware } from "../middleware/auth.js";
 import { db } from "../db/index.js";
-import { splits, participants, items, itemShares, extras, splitCosts, payments } from "../db/schema.js";
-import { eq, inArray } from "drizzle-orm";
+import { splits, participants, items, itemShares, extras, splitCosts, payments, aiUsage } from "../db/schema.js";
+import { eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { calculateSplit, ItemShareInput } from "../services/calculation.js";
 import { WalletService } from "../services/wallet.js";
+import { PricingService } from "../services/pricing.js";
 
-const app = new Hono<{ Variables: { clerkUserId: string } }>();
+const app = new Hono<{ Variables: { clerkUserId?: string, guestId?: string } }>();
 
 app.use("*", authMiddleware);
+
+const getUserIdOrGuestId = (c: any) => {
+    const userId = c.get("clerkUserId");
+    const guestId = c.get("guestId");
+    return { userId, guestId };
+};
+
+const getOwnerFilter = (c: any) => {
+    const { userId, guestId } = getUserIdOrGuestId(c);
+    if (userId) return eq(splits.ownerClerkUserId, userId);
+    if (guestId) return eq(splits.ownerGuestId, guestId);
+    throw new Error("No owner identification");
+};
 
 // -----------------------------------------------------------------------------
 // GET /splits (List)
 // -----------------------------------------------------------------------------
 app.get("/", async (c) => {
-    const userId = c.get("clerkUserId");
+    const { userId, guestId } = getUserIdOrGuestId(c);
+    const filter = userId ? eq(splits.ownerClerkUserId, userId) : eq(splits.ownerGuestId, guestId!);
     const userSplits = await db.query.splits.findMany({
-        where: eq(splits.ownerClerkUserId, userId),
+        where: filter,
         orderBy: (splits, { desc }) => [desc(splits.createdAt)],
         with: {
             participants: true,
@@ -47,8 +62,12 @@ app.get("/:id", async (c) => {
     });
 
     if (!split) return c.json({ error: "Split not found" }, 404);
-    if (split.ownerClerkUserId !== userId) {
-        return c.json({ error: "Unauthorized" }, 403);
+
+    const { userId: currentUserId, guestId } = getUserIdOrGuestId(c);
+    if (currentUserId) {
+        if (split.ownerClerkUserId !== currentUserId) return c.json({ error: "Unauthorized" }, 403);
+    } else {
+        if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
     }
 
     // Fetch consumers
@@ -87,7 +106,13 @@ app.patch("/:id", zValidator("json", z.object({
 
     const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
     if (!split) return c.json({ error: "Not found" }, 404);
-    if (split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+
+    const { userId: currentUserId, guestId } = getUserIdOrGuestId(c);
+    if (currentUserId) {
+        if (split.ownerClerkUserId !== currentUserId) return c.json({ error: "Unauthorized" }, 403);
+    } else {
+        if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
+    }
 
     const updates: Partial<typeof splits.$inferInsert> = {
         updatedAt: Math.floor(Date.now() / 1000),
@@ -128,7 +153,13 @@ app.delete("/:id", async (c) => {
 
     const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
     if (!split) return c.json({ error: "Not found" }, 404);
-    if (split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+
+    const { userId: currentUserId, guestId } = getUserIdOrGuestId(c);
+    if (currentUserId) {
+        if (split.ownerClerkUserId !== currentUserId) return c.json({ error: "Unauthorized" }, 403);
+    } else {
+        if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
+    }
 
     await db.transaction(async (tx) => {
         // Delete shares/items (manual cleanup — do not rely on FK cascade being enabled)
@@ -162,16 +193,16 @@ app.post("/", zValidator("json", z.object({
     name: z.string().optional(),
     peopleCount: z.number().min(2).max(20).default(2)
 })), async (c) => {
-    const userId = c.get("clerkUserId");
+    const { userId, guestId } = getUserIdOrGuestId(c);
     const { name, peopleCount } = c.req.valid("json");
-
     const splitId = randomUUID();
     const now = Math.floor(Date.now() / 1000);
 
     await db.transaction(async (tx) => {
         await tx.insert(splits).values({
             id: splitId,
-            ownerClerkUserId: userId,
+            ownerClerkUserId: userId || null,
+            ownerGuestId: guestId || null,
             name: name || `Rateio ${new Date().toLocaleDateString()}`,
             createdAt: now,
             updatedAt: now,
@@ -211,7 +242,13 @@ app.put("/:id/participants", zValidator("json", updateParticipantsSchema), async
 
     const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
     if (!split) return c.json({ error: "Not found" }, 404);
-    if (split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+
+    const { userId: currentUserId, guestId } = getUserIdOrGuestId(c);
+    if (currentUserId) {
+        if (split.ownerClerkUserId !== currentUserId) return c.json({ error: "Unauthorized" }, 403);
+    } else {
+        if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
+    }
     if (split.status === "PAID") return c.json({ error: "Split is locked" }, 400);
 
     await db.transaction(async (tx) => {
@@ -269,7 +306,14 @@ app.put("/:id/items", zValidator("json", updateItemsSchema), async (c) => {
     const { items: newItems } = c.req.valid("json");
 
     const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
-    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+    if (!split) return c.json({ error: "Not found" }, 404);
+
+    const { userId: currentUserId, guestId } = getUserIdOrGuestId(c);
+    if (currentUserId) {
+        if (split.ownerClerkUserId !== currentUserId) return c.json({ error: "Unauthorized" }, 403);
+    } else {
+        if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
+    }
     if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
 
     // Validate that consumerIds reference existing participants of this split.
@@ -376,11 +420,18 @@ const updateExtrasSchema = z.object({
 
 app.put("/:id/extras", zValidator("json", updateExtrasSchema), async (c) => {
     const id = c.req.param("id");
-    const userId = c.get("clerkUserId");
     const { extras: newExtras } = c.req.valid("json");
 
     const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
-    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+    if (!split) return c.json({ error: "Not found" }, 404);
+
+    const { userId: currentUserId, guestId } = getUserIdOrGuestId(c);
+    if (currentUserId) {
+        if (split.ownerClerkUserId !== currentUserId) return c.json({ error: "Unauthorized" }, 403);
+    } else {
+        if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
+    }
+
     if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
 
     await db.transaction(async (tx) => {
@@ -414,11 +465,18 @@ app.post("/:id/ai-parse", zValidator("json", z.object({
     text: z.string()
 })), async (c) => {
     const id = c.req.param("id");
-    const userId = c.get("clerkUserId");
     const { text } = c.req.valid("json");
 
     const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
-    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+    if (!split) return c.json({ error: "Not found" }, 404);
+
+    const { userId: currentUserId, guestId } = getUserIdOrGuestId(c);
+    if (currentUserId) {
+        if (split.ownerClerkUserId !== currentUserId) return c.json({ error: "Unauthorized" }, 403);
+    } else {
+        if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
+    }
+
     if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
 
     // Calculate cost based on length (keep existing tiers logic or simplify)
@@ -434,9 +492,21 @@ app.post("/:id/ai-parse", zValidator("json", z.object({
     else cost = parseInt(process.env.AI_TEXT_TIER_3_CENTS || "200");
 
     try {
-        const items = await OpenAIService.parseItemsFromText(text);
+        const { items, usage, model } = await OpenAIService.parseItemsFromText(text);
+
+        // Log Usage
+        await db.insert(aiUsage).values({
+            id: randomUUID(),
+            splitId: id,
+            feature: "AI_PARSE",
+            model,
+            promptTokens: usage?.prompt_tokens,
+            completionTokens: usage?.completion_tokens,
+            totalTokens: usage?.total_tokens
+        });
+
         return c.json({
-            costCents: cost,
+            costCents: cost, // Mantendo suporte ao legado se necessário, mas novos custos virão do log
             parsedItems: items
         });
     } catch (e: any) {
@@ -450,10 +520,17 @@ app.post("/:id/ai-parse", zValidator("json", z.object({
 // -----------------------------------------------------------------------------
 app.post("/:id/voice-parse", async (c) => {
     const id = c.req.param("id");
-    const userId = c.get("clerkUserId");
 
     const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
-    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+    if (!split) return c.json({ error: "Not found" }, 404);
+
+    const { userId: currentUserId, guestId } = getUserIdOrGuestId(c);
+    if (currentUserId) {
+        if (split.ownerClerkUserId !== currentUserId) return c.json({ error: "Unauthorized" }, 403);
+    } else {
+        if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
+    }
+
     if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
 
     const body = await c.req.parseBody();
@@ -466,13 +543,34 @@ app.post("/:id/voice-parse", async (c) => {
     }
 
     try {
-        const transcript = await OpenAIService.transcribeAudio(audioFile as any);
-        const items = await OpenAIService.parseItemsFromText(transcript);
+        const { text: transcript, model: whisperModel, durationSeconds } = await OpenAIService.transcribeAudio(audioFile as any);
+
+        // Log Whisper Usage
+        await db.insert(aiUsage).values({
+            id: randomUUID(),
+            splitId: id,
+            feature: "VOICE_TRANSCRIBE",
+            model: whisperModel,
+            durationSeconds: Math.ceil(durationSeconds)
+        });
+
+        const { items, usage: gptUsage, model: gptModel } = await OpenAIService.parseItemsFromText(transcript);
+
+        // Log GPT Usage
+        await db.insert(aiUsage).values({
+            id: randomUUID(),
+            splitId: id,
+            feature: "VOICE_PARSE",
+            model: gptModel,
+            promptTokens: gptUsage?.prompt_tokens,
+            completionTokens: gptUsage?.completion_tokens,
+            totalTokens: gptUsage?.total_tokens
+        });
 
         return c.json({
             transcript,
             parsedItems: items,
-            costCents: parseInt(process.env.AI_TEXT_TIER_1_CENTS || "50") // Custo base fixo por áudio no MVP
+            costCents: 0 // Indicativo, o custo real será calculado no review
         });
     } catch (e: any) {
         console.error("[POST /splits/:id/voice-parse] IA Error:", e);
@@ -485,10 +583,17 @@ app.post("/:id/voice-parse", async (c) => {
 // -----------------------------------------------------------------------------
 app.post("/:id/ocr-parse", async (c) => {
     const id = c.req.param("id");
-    const userId = c.get("clerkUserId");
 
     const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
-    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+    if (!split) return c.json({ error: "Not found" }, 404);
+
+    const { userId: currentUserId, guestId } = getUserIdOrGuestId(c);
+    if (currentUserId) {
+        if (split.ownerClerkUserId !== currentUserId) return c.json({ error: "Unauthorized" }, 403);
+    } else {
+        if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
+    }
+
     if (split.status === "PAID") return c.json({ error: "Locked" }, 400);
 
     const body = await c.req.parseBody();
@@ -502,11 +607,22 @@ app.post("/:id/ocr-parse", async (c) => {
     try {
         const buffer = await (imageFile as any).arrayBuffer();
         const base64 = Buffer.from(buffer).toString("base64");
-        const items = await OpenAIService.parseItemsFromImage(base64);
+        const { items, usage, model } = await OpenAIService.parseItemsFromImage(base64);
+
+        // Log Usage
+        await db.insert(aiUsage).values({
+            id: randomUUID(),
+            splitId: id,
+            feature: "OCR_PARSE",
+            model,
+            promptTokens: usage?.prompt_tokens,
+            completionTokens: usage?.completion_tokens,
+            totalTokens: usage?.total_tokens
+        });
 
         return c.json({
             parsedItems: items,
-            costCents: 150 // Custo fixo por OCR no MVP (GPT-4o é mais caro)
+            costCents: 0
         });
     } catch (e: any) {
         console.error("[POST /splits/:id/ocr-parse] IA Error:", e);
@@ -519,10 +635,16 @@ app.post("/:id/ocr-parse", async (c) => {
 // -----------------------------------------------------------------------------
 app.post("/:id/transcribe", async (c) => {
     const id = c.req.param("id");
-    const userId = c.get("clerkUserId");
 
     const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
-    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+    if (!split) return c.json({ error: "Not found" }, 404);
+
+    const { userId: currentUserId, guestId } = getUserIdOrGuestId(c);
+    if (currentUserId) {
+        if (split.ownerClerkUserId !== currentUserId) return c.json({ error: "Unauthorized" }, 403);
+    } else {
+        if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
+    }
 
     const body = await c.req.parseBody();
     const audioFile = body["audio"];
@@ -532,8 +654,29 @@ app.post("/:id/transcribe", async (c) => {
     }
 
     try {
-        const transcript = await OpenAIService.transcribeAudio(audioFile);
-        const names = await OpenAIService.parseParticipantsFromText(transcript);
+        const { text: transcript, model: whisperModel, durationSeconds } = await OpenAIService.transcribeAudio(audioFile);
+
+        // Log Whisper Usage
+        await db.insert(aiUsage).values({
+            id: randomUUID(),
+            splitId: id,
+            feature: "PARTICIPANTS_TRANSCRIBE",
+            model: whisperModel,
+            durationSeconds: Math.ceil(durationSeconds)
+        });
+
+        const { names, usage, model } = await OpenAIService.parseParticipantsFromText(transcript);
+
+        // Log GPT Usage
+        await db.insert(aiUsage).values({
+            id: randomUUID(),
+            splitId: id,
+            feature: "PARTICIPANTS_PARSE",
+            model,
+            promptTokens: usage?.prompt_tokens,
+            completionTokens: usage?.completion_tokens,
+            totalTokens: usage?.total_tokens
+        });
 
         return c.json({ transcript, names });
     } catch (e: any) {
@@ -558,7 +701,14 @@ app.post("/:id/compute-review", async (c) => {
         }
     });
 
-    if (!split || split.ownerClerkUserId !== userId) return c.json({ error: "Unauthorized" }, 403);
+    if (!split) return c.json({ error: "Not found" }, 404);
+
+    const { userId: currentUserId, guestId } = getUserIdOrGuestId(c);
+    if (currentUserId) {
+        if (split.ownerClerkUserId !== currentUserId) return c.json({ error: "Unauthorized" }, 403);
+    } else {
+        if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
+    }
 
     const itemIds = split.items.map(i => i.id);
     let allShares: any[] = [];
@@ -569,8 +719,20 @@ app.post("/:id/compute-review", async (c) => {
     // Convert to strict input type
     const shareInputs: ItemShareInput[] = allShares.map(s => ({ itemId: s.itemId, participantId: s.participantId }));
 
-    const baseFeeCents = parseInt(process.env.BASE_FEE_CENTS || "0");
-    const aiCents = 0;
+    // Calculate AI costs from usage logs
+    const usageLogs = await db.select().from(aiUsage).where(eq(aiUsage.splitId, id));
+    let totalAiCents = 0;
+    for (const log of usageLogs) {
+        totalAiCents += PricingService.calculateAiCostCents({
+            model: log.model,
+            promptTokens: log.promptTokens || undefined,
+            completionTokens: log.completionTokens || undefined,
+            durationSeconds: log.durationSeconds || undefined
+        });
+    }
+
+    const baseFeeCents = parseInt(process.env.BASE_FEE_CENTS || "100");
+    const aiCents = totalAiCents;
 
     const result = calculateSplit(
         split.participants,
@@ -595,7 +757,7 @@ app.post("/:id/compute-review", async (c) => {
         }
     });
 
-    const walletBalance = await WalletService.getBalance(userId);
+    const walletBalance = currentUserId ? await WalletService.getBalance(currentUserId) : 0;
 
     return c.json({
         calculation: result,
