@@ -39,20 +39,25 @@ Fora do MVP:
 
 ---
 
-## 5. Fluxo do MVP
-1. Criar rateio (nome opcional + número de pessoas). O nome pode vir de **geolocalização**: GPS (reverse geocoding) ou busca de lugares por texto; coordenadas e metadados do lugar são opcionais e armazenados no split.
-2. Editar nomes dos participantes (apenas o criador)
-3. Inserir itens:
-   - Manual (item + valor + consumidores)
-   - Colar texto (parser local + IA opcional com custo exibido antes)
-4. Informar taxas/extras (serviço %, couvert, extras)
-5. Revisão (mostra total geral, bloqueia valores por pessoa)
-6. Pagamento via PIX (taxa base + custo variável se IA)
-7. Resultado final + link público read-only
+## 5. Fluxo do MVP (Onboarding V2)
+1. **Participantes**: Criar ou acessar rateio e adicionar quem está na mesa (suporte a geolocalização para o nome do rateio).
+2. **Itens**: Inserir consumos:
+   - Manual: Digitação rápida.
+   - **Scan (OCR)**: Captura de foto da conta/comanda.
+   - **Voz**: Narrar o que foi consumido.
+   - Colar Texto: Parser inteligente para textos de apps de delivery ou notas.
+3. **Revisão**: Validar cálculos e desbloquear valores via PIX.
+4. **Recibo**: Link público para conferência.
 
 ---
 
-## 6. Monetização
+## 6. Identidade e Acesso
+- **Identidade Persistente**: Usuários sem conta (guests) possuem um ID único salvo no navegador que garante a posse dos rateios criados.
+- **Login Opcional**: Clerk para usuários que desejam histórico unificado em múltiplos dispositivos.
+
+---
+
+## 7. Monetização
 - Taxa base fixa por rateio
 - Custo adicional apenas se usar IA
 - Top-up opcional de créditos para uso futuro

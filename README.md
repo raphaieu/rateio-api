@@ -8,6 +8,7 @@ MVP Backend for "Rateio Justo" - Bill Splitting App.
 - **Database**: Turso (LibSQL) + Drizzle ORM
 - **Auth**: Clerk (JWT)
 - **Payments**: Mercado Pago (PIX)
+- **AI Pricing**: Dynamic consumption-based tiers for LLM costs
 - **Analytics**: Vercel Web Analytics
 
 ## Setup
@@ -55,7 +56,10 @@ npx tsx test/calculation.test.ts
 | PUT | `/splits/:id/participants` | Update participants | Auth |
 | PUT | `/splits/:id/items` | Update items & shares | Auth |
 | PUT | `/splits/:id/extras` | Update service fees/extras | Auth |
-| POST | `/splits/:id/ai-parse` | Parse receipt text (stub) | Auth |
+| POST | `/splits/:id/ai-parse` | Parse receipt text | Auth |
+| POST | `/splits/:id/voice-parse` | Parse items from audio file | Auth |
+| POST | `/splits/:id/ocr-parse` | Parse items from bill image | Auth |
+| POST | `/splits/:id/transcribe` | Transcribe participants from audio | Auth |
 | POST | `/splits/:id/compute-review` | Calculate totals & freeze pricing | Auth |
 | POST | `/splits/:id/pay` | Pay via Wallet or PIX | Auth |
 | GET | `/public/:slug` | Read-only view of PAID split | Public |

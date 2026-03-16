@@ -7,8 +7,13 @@ type AuthVariables = {
     guestId?: string;
 };
 
-export const authMiddleware = createMiddleware<{ Variables: AuthVariables }>(
+export const populateAuth = createMiddleware<{ Variables: AuthVariables }>(
     async (c, next) => {
+        // Skip if already populated (for nested calls)
+        if (c.get("clerkUserId") || c.get("guestId")) {
+            return await next();
+        }
+
         const authHeader = c.req.header("Authorization");
         const guestIdHeader = c.req.header("x-guest-id");
 
@@ -21,20 +26,33 @@ export const authMiddleware = createMiddleware<{ Variables: AuthVariables }>(
 
                 if (verified.sub) {
                     c.set("clerkUserId", verified.sub);
-                    return await next();
                 }
             } catch (err: any) {
-                console.error("Auth error:", err);
+                // Don't log expected errors for unauthenticated users if you want them silent
+                // console.error("Auth error:", err);
             }
         }
 
         if (guestIdHeader) {
             c.set("guestId", guestIdHeader);
+        }
+
+        await next();
+    }
+);
+
+/**
+ * STRICT middleware: throws 401 if no identification found.
+ */
+export const authMiddleware = createMiddleware<{ Variables: AuthVariables }>(
+    async (c, next) => {
+        // Ensure context is populated
+        await populateAuth(c, async () => { });
+
+        if (c.get("clerkUserId") || c.get("guestId")) {
             return await next();
         }
 
-        // If neither Clerk nor Guest, but we might want to allow some routes to be public?
-        // Routes using this middleware expect either clerkUserId or guestId.
         throw new HTTPException(401, { message: "Missing or invalid authentication (Clerk or Guest)" });
     }
 );

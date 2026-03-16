@@ -2,12 +2,13 @@
 
 ## 0. Objetivo
 Fornecer uma API simples e segura para suportar o MVP do Rateio Justo:
-- persistência de rateios (incluindo geolocalização opcional para nome do rateio)
+- persistência de rateios (incluindo geolocalização)
 - cálculo determinístico
-- paywall via PIX
-- wallet de créditos
-- link público read-only
-- geo: reverse geocoding e busca de lugares para definir nome do rateio (Google Places/Geocoding; fallback Nominatim)
+- paywall via PIX (Mercado Pago)
+- AI Usage Tracking & Pricing Service
+- OCR Parsing (GPT-4o) & Voice Parsing (Whisper + GPT)
+- link público read-only (Recibo)
+- Hybrid Auth (Clerk + Guest ID persistence)
 
 ---
 
@@ -22,8 +23,8 @@ Fornecer uma API simples e segura para suportar o MVP do Rateio Justo:
 ---
 
 ## 2. Regras de segurança
-- Toda edição exige Clerk JWT válido
-- Apenas owner pode editar o split
+- Toda edição exige Clerk JWT válido OU Guest ID correspondente
+- Apenas owner pode editar o split (checa clerkUserId ou guestId)
 - Link público só retorna dados se split = PAID
 - Preços nunca vêm do client
 

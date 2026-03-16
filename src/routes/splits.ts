@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { authMiddleware } from "../middleware/auth.js";
+import { authMiddleware, populateAuth } from "../middleware/auth.js";
 import { db } from "../db/index.js";
 import { splits, participants, items, itemShares, extras, splitCosts, payments, aiUsage } from "../db/schema.js";
 import { eq, inArray, sql } from "drizzle-orm";
@@ -12,12 +12,28 @@ import { PricingService } from "../services/pricing.js";
 
 const app = new Hono<{ Variables: { clerkUserId?: string, guestId?: string } }>();
 
-app.use("*", authMiddleware);
+app.use("*", populateAuth);
+
+// Apply strict auth to all routes except public receipt and calculation (which handles it internally)
+app.use("*", async (c, next) => {
+    const path = c.req.path;
+    if (path.endsWith("/public") || path.endsWith("/compute-review")) {
+        return next();
+    }
+    return authMiddleware(c, next);
+});
 
 const getUserIdOrGuestId = (c: any) => {
     const userId = c.get("clerkUserId");
     const guestId = c.get("guestId");
     return { userId, guestId };
+};
+
+const isOwner = (split: any, c: any) => {
+    const { userId, guestId } = getUserIdOrGuestId(c);
+    const matchesClerk = userId && split.ownerClerkUserId === userId;
+    const matchesGuest = guestId && split.ownerGuestId === guestId;
+    return !!(matchesClerk || matchesGuest);
 };
 
 const getOwnerFilter = (c: any) => {
@@ -69,6 +85,34 @@ app.get("/:id", async (c) => {
     } else {
         if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
     }
+
+    // Fetch consumers
+    const itemIds = split.items.map(i => i.id);
+    let allShares: any[] = [];
+    if (itemIds.length > 0) {
+        allShares = await db.select().from(itemShares).where(inArray(itemShares.itemId, itemIds));
+    }
+
+    return c.json({ ...split, shares: allShares });
+});
+
+// -----------------------------------------------------------------------------
+// GET /splits/:id/public
+// -----------------------------------------------------------------------------
+app.get("/:id/public", async (c) => {
+    const id = c.req.param("id");
+
+    const split = await db.query.splits.findFirst({
+        where: eq(splits.id, id),
+        with: {
+            participants: { orderBy: (p, { asc }) => [asc(p.sortOrder)] },
+            items: true,
+            extras: true,
+            splitCosts: true
+        },
+    });
+
+    if (!split) return c.json({ error: "Split not found" }, 404);
 
     // Fetch consumers
     const itemIds = split.items.map(i => i.id);
@@ -686,6 +730,38 @@ app.post("/:id/transcribe", async (c) => {
 });
 
 // -----------------------------------------------------------------------------
+// POST /splits/:id/mark-as-paid (Dev Simulation)
+// -----------------------------------------------------------------------------
+app.post("/:id/mark-as-paid", async (c) => {
+    const id = c.req.param("id");
+    const split = await db.query.splits.findFirst({ where: eq(splits.id, id) });
+    if (!split) return c.json({ error: "Not found" }, 404);
+
+    if (!isOwner(split, c)) {
+        const { userId, guestId } = getUserIdOrGuestId(c);
+        console.warn(`[403 Unauthorized mark-as-paid] splitId=${id}, userId=${userId}, guestId=${guestId}, ownerClerk=${split.ownerClerkUserId}, ownerGuest=${split.ownerGuestId}`);
+        return c.json({
+            error: "Unauthorized",
+            debug: {
+                matchesClerk: userId && split.ownerClerkUserId === userId,
+                matchesGuest: guestId && split.ownerGuestId === guestId,
+                status: split.status
+            }
+        }, 403);
+    }
+
+    await db.update(splits)
+        .set({
+            status: "PAID",
+            publicSlug: randomUUID().slice(0, 8),
+            updatedAt: Math.floor(Date.now() / 1000)
+        })
+        .where(eq(splits.id, id));
+
+    return c.json({ success: true, status: "PAID" });
+});
+
+// -----------------------------------------------------------------------------
 // POST /splits/:id/compute-review
 // -----------------------------------------------------------------------------
 app.post("/:id/compute-review", async (c) => {
@@ -704,10 +780,23 @@ app.post("/:id/compute-review", async (c) => {
     if (!split) return c.json({ error: "Not found" }, 404);
 
     const { userId: currentUserId, guestId } = getUserIdOrGuestId(c);
-    if (currentUserId) {
-        if (split.ownerClerkUserId !== currentUserId) return c.json({ error: "Unauthorized" }, 403);
-    } else {
-        if (split.ownerGuestId !== guestId) return c.json({ error: "Unauthorized" }, 403);
+    const isOwnerOk = isOwner(split, c);
+
+    if (!isOwnerOk && split.status !== "PAID") {
+        console.warn(`[403 Unauthorized compute-review] splitId=${id}, status=${split.status}, isOwner=${isOwnerOk}, userId=${currentUserId}, guestId=${guestId}, ownerClerk=${split.ownerClerkUserId}, ownerGuest=${split.ownerGuestId}`);
+        return c.json({
+            error: "Unauthorized",
+            debug: {
+                isOwner: isOwnerOk,
+                status: split.status,
+                session: { userId: currentUserId, guestId },
+                database: { ownerClerk: split.ownerClerkUserId, ownerGuest: split.ownerGuestId },
+                matches: {
+                    clerk: currentUserId && currentUserId === split.ownerClerkUserId,
+                    guest: guestId && guestId === split.ownerGuestId
+                }
+            }
+        }, 403);
     }
 
     const itemIds = split.items.map(i => i.id);
